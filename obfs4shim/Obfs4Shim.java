@@ -62,7 +62,7 @@ public class Obfs4Shim {
 	throws IOException {
 		Socket obfs4Socket;
 		try { obfs4Socket = obfs4proxyHandshake(obfs4Port); }
-		catch (SocksHandshakeException e) {
+		catch (ConnectException | SocksHandshakeException e) {
 			Logging.error("obfs4proxy handshake failed: " + e.toString());
 			if (Logging.level <= Logging.DEBUG)
 				e.printStackTrace();
