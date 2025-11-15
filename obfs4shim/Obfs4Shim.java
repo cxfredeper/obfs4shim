@@ -11,6 +11,7 @@ import obfs4shim.Obfs4proxyProcess;
 
 import static obfs4shim.Logging.info;
 import static obfs4shim.Logging.infof;
+import static obfs4shim.Logging.debug;
 import static obfs4shim.Logging.debugf;
 
 
@@ -61,6 +62,10 @@ public class Obfs4Shim {
 	private static void handleClient(Socket client, int obfs4Port)
 	throws IOException {
 		Socket obfs4Socket;
+		int clientPort = client.getPort();
+
+		infof("new client from port %d: starting obfs4proxy handshake...",
+			clientPort);
 		try { obfs4Socket = obfs4proxyHandshake(obfs4Port); }
 		catch (ConnectException | SocksHandshakeException e) {
 			Logging.error("obfs4proxy handshake failed: " + e.toString());
@@ -70,9 +75,7 @@ public class Obfs4Shim {
 			return;
 		}
 
-		int clientPort = client.getPort();
-
-		debugf("obfs4proxy handshake successful; ready for client from port %d",
+		infof("new client from port %d: obfs4proxy handshake successful",
 			clientPort);
 
 		// Forward client to obfs4.
@@ -186,12 +189,12 @@ public class Obfs4Shim {
 		var in = obfs4Socket.getInputStream();
 		var out = obfs4Socket.getOutputStream();
 
-
 		// The client connects to the server, and sends a version
 		// identifier/method selection message:
 		// VER 5, 1 method, 0x02 for user/pass.
 		out.write(new byte[] { 0x05, 0x01, 0x02 });
 		out.flush();
+		debug("obfs4proxy handshake: sent method selection request");
 
 
 		// The server selects from one of the methods given in METHODS, and
@@ -200,13 +203,14 @@ public class Obfs4Shim {
 		if (!Arrays.equals(in.readNBytes(2), new byte[] { 0x5, 0x2 }))
 			throw new SocksHandshakeException(
 				"obfs4proxy did not accept user/pass authentication method.");
+		debug("obfs4proxy handshake: recv method selection reply");
 
 
 		// Once the SOCKS V5 server has started, and the client has selected the
 		// Username/Password Authentication protocol, the Username/Password
 		// subnegotiation begins.  This begins with the client producing a
 		// Username/Password request:
-		// For obfs4proxy hanshake, this is the cert+iat-mode data.
+		// For obfs4proxy handshake, this is the cert+iat-mode data.
 		var cert = Config.get("cert");
 		var iat = Config.get("iat_mode");
 		byte[] user = (cert + ";" + iat).getBytes("UTF-8");
@@ -218,6 +222,7 @@ public class Obfs4Shim {
 				// password len of 1, null password.
 				new byte[] { 0x01, 0x00 }));
 		out.flush();
+		debug("obfs4proxy handshake: sent user/pass request");
 
 
 		// The server verifies the supplied UNAME and PASSWD, and sends the
@@ -225,6 +230,7 @@ public class Obfs4Shim {
 		// VER 1, 0x00 indicates success.
 		if (!Arrays.equals(in.readNBytes(2), new byte[] { 0x01, 0x00 }))
 			throw new SocksHandshakeException("obfs4proxy user/pass authentication failed.");
+		debug("obfs4proxy handshake: user/pass accepted");
 
 
 		// The SOCKS request is formed as follows:
@@ -248,12 +254,19 @@ public class Obfs4Shim {
 			new byte[] { (byte) (remotePort >> 8), (byte) (remotePort & 0xFF) });
 		out.write(request);
 		out.flush();
+		debug("obfs4proxy handshake: sent SOCKS CONNECT request");
 
-		// The server evaluates the request,
-		// and returns a reply formed just like the request.
-		byte[] reply = in.readNBytes(request.length);
-		assert reply.length == request.length;
+
+		byte[] reply = in.readNBytes(4);
 		checkReply(reply[1]);
+		int replySize = switch (reply[3]) {
+			case 0x01 -> 4 + 4 + 2;  // IPv4
+			case 0x04 -> 4 + 16 + 2; // IPv6
+			default -> throw new UnsupportedOperationException();
+		};
+		// We don't care about BND.ADDR and BND.PORT.
+		in.readNBytes(replySize - 4);
+		debug("obfs4proxy handshake: recv SOCKS CONNECT reply");
 
 		return obfs4Socket;
 	}
